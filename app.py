@@ -1,74 +1,85 @@
-from langchain_community.document_loaders import PyPDFLoader, OnlinePDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Pinecone
-from sentence_transformers import SentenceTransformer
-from langchain.chains.question_answering import load_qa_chain
-from langchain_community.llms import LlamaCpp
-from langchain.callbacks.manager import CallbackManager
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-from huggingface_hub import hf_hub_download
-from langchain.chains.question_answering import load_qa_chain
-from langchain_community.llms import HuggingFaceHub
-from langchain_community.llms import LlamaCpp
-from langchain.callbacks.manager import CallbackManager
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-from huggingface_hub import hf_hub_download
-from langchain.chains.question_answering import load_qa_chain
-import pinecone
 import os
+from PyPDF2 import PdfReader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+#import streamlit as st
+import google.generativeai as genai
+from langchain_community.vectorstores import FAISS
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.chains.question_answering import load_qa_chain
+from langchain.prompts import PromptTemplate
+from dotenv import load_dotenv
 
-loader = PyPDFLoader("/workspaces/Reading_docs_GEMINI/Reposición_ESIM_Manual.pdf")
-data = loader.load()
-print(data)
+load_dotenv()
+os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-text_splitter=RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=0)
-docs=text_splitter.split_documents(data)
-len(docs)
-os.environ["HUGGINGFACEHUB_API_TOKEN"] = "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"
-PINECONE_API_KEY = os.environ.get('PINECONE_API_KEY', 'f5444e56-58db-42db-afd6-d4bd9b2cb40c')
-PINECONE_API_ENV = os.environ.get('PINECONE_API_ENV', 'asia-southeast1-gcp-free')
+# read all pdf files and return text
 
-embeddings=HuggingFaceEmbeddings(model_name='sentence-transformers/all-MiniLM-L6-v2')
+import os
+from PyPDF2 import PdfReader
 
-pinecone.init(
-    api_key=PINECONE_API_KEY,  # find at app.pinecone.io
-    environment=PINECONE_API_ENV  # next to api key in console
-)
-index_name = "langchainpinecone" # put in the name of your pinecone index here
-docsearch=Pinecone.from_texts([t.page_content for t in docs], embeddings, index_name=index_name)
+def get_pdf_text(pdf_folder):
+    text = ""
+    for filename in os.listdir(pdf_folder):
+        if filename.endswith(".pdf"):
+            pdf_path = os.path.join(pdf_folder, filename)
+            pdf_reader = PdfReader(pdf_path)
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+    return text
 
-#query="What are examples of good data science teams?"
-query="YOLOv7 outperforms which models"
-docs=docsearch.similarity_search(query)
-
-!CMAKE_ARGS="-DLLAMA_CUBLAS=on" FORCE_CMAKE=1 pip install llama-cpp-python --force-reinstall --upgrade --no-cache-dir --verbose
-
-
-callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
-
-model_name_or_path = "TheBloke/Llama-2-13B-chat-GGML"
-model_basename = "llama-2-13b-chat.ggmlv3.q5_1.bin" # the model is in bin format
-model_path = hf_hub_download(repo_id=model_name_or_path, filename=model_basename)
-n_gpu_layers = 40  # Change this value based on your model and your GPU VRAM pool.
-n_batch = 256  # Should be between 1 and n_ctx, consider the amount of VRAM in your GPU.
-
-# Loading model,
-llm = LlamaCpp(
-    model_path=model_path,
-    max_tokens=256,
-    n_gpu_layers=n_gpu_layers,
-    n_batch=n_batch,
-    callback_manager=callback_manager,
-    n_ctx=1024,
-    verbose=False,
-)
-
-chain=load_qa_chain(llm, chain_type="stuff")
-llm=HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
-chain=load_qa_chain(llm, chain_type="stuff")
-query="What are examples of good data science teams?"
-docs=docsearch.similarity_search(query)
-chain.run(input_documents=docs, question=query)
+# split text into chunks
 
 
+def get_text_chunks(text):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=10000, chunk_overlap=1000)
+    chunks = splitter.split_text(text)
+    return chunks  # list of strings
+
+# get embeddings for each chunk
+def get_vector_store(chunks):
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="models/embedding-001")  # type: ignore
+    vector_store = FAISS.from_texts(chunks, embedding=embeddings)
+    vector_store.save_local("Q_A_docs_GEMINI/faiss_index")
+
+
+def get_conversational_chain():
+    prompt_template = """
+    Responda la pregunta lo más detalladamente posible desde el contexto proporcionado, asegúrese de proporcionar todos los detalles, si la respuesta no está en el contexto proporcionado, simplemente diga "la respuesta no está disponible en el contexto", no proporcione la respuesta incorrecta\n\n
+    Contexto:\n {context}?\n
+    Pregunta: \n{question}\n
+
+    Respuesta:
+    """
+
+    model = ChatGoogleGenerativeAI(model="gemini-pro",
+                                   client=genai,
+                                   temperature=0.8,
+                                   )
+    prompt = PromptTemplate(template=prompt_template,
+                            input_variables=["context", "question"])
+    chain = load_qa_chain(llm=model, chain_type="stuff", prompt=prompt)
+    return chain
+
+def user_input(user_question):
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="models/embedding-001")  # type: ignore
+
+    new_db = FAISS.load_local("Q_A_docs_GEMINI/faiss_index", embeddings, allow_dangerous_deserialization=True) 
+    docs = new_db.similarity_search(user_question)
+
+    chain = get_conversational_chain()
+
+    response = chain(
+        {"input_documents": docs, "question": user_question}, return_only_outputs=True, )
+
+    return print(response)
+
+raw_text = get_pdf_text("Q_A_docs_GEMINI/docs")
+text_chunks = get_text_chunks(raw_text)
+get_vector_store(text_chunks)
+input = input()
+user_input(input)
