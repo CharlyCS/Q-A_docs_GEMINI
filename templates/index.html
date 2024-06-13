@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='claro.svg') }}" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Plataforma de Conocimiento - Claro</title>
+    <script>
+        function runScript() {
+            const variable = document.getElementById('variable').value;
+            fetch('/run-script',{
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    'variable': variable  // Send the variable in the POST request
+                })
+            })
+                .then(response => response.text())
+                .then(data => {
+                    const resultDiv = document.getElementById('result');
+                    const newContent = document.createElement('p');
+                    newContent.innerHTML = data;
+                    resultDiv.appendChild(newContent);
+                })
+                .catch(error => console.error('Error:', error));
+        }
+    </script>
+</head>
+<body>
+    <h1 class="px-16 py-8 text-white font-ibmplex text-2xl">Plataforma de Conocimiento - Claro</h1>
+    <form action="{{ url_for('process_pdf') }}" method="post" enctype="multipart/form-data">
+        <input type="file" name="pdf" accept="application/pdf">
+        <button type="submit">Upload PDF</button>
+    </form>
+    <div id = "input" class="" >
+        <input
+          id = "variable"
+          type = "text"
+          style="width: 500px; height: 50px; padding: 20px;"
+          placeholder="Escribe aqui"
+        />
+        <button onclick="runScript()" type="button">Run Script</button>
+        <div id="result"></div>
+    </div>
+</body>
+</html>
